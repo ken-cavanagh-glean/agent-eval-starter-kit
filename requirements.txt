@@ -1,1 +1,6 @@
 glean-api-client
+httpx
+langchain
+langchain-glean
+python-dotenv
+pyyaml

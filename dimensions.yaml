@@ -1,0 +1,23 @@
+# Evaluation Dimensions
+# Edit these to match your evaluation criteria.
+# Each dimension has a name, description, and scale.
+# The judge will score each agent response on every dimension listed here.
+
+- name: Groundedness
+  description: >
+    Is the response grounded in data verifiable in Glean?
+    Use Glean Search to check whether claims can be traced to indexed documents.
+  scale: FULL | SUBSTANTIAL | PARTIAL | MINIMAL | FAILURE
+
+- name: Response Quality
+  description: >
+    Is the response clear, well-structured, and actionable for the user?
+    Consider formatting, completeness, and whether it directly addresses the request.
+  scale: FULL | SUBSTANTIAL | PARTIAL | MINIMAL | FAILURE
+
+- name: Task Success
+  description: >
+    Did the agent successfully complete the requested task?
+    A pass means the core request was fulfilled.
+    Partial means some but not all aspects were addressed.
+  scale: PASS | PARTIAL | FAIL
