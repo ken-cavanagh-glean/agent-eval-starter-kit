@@ -30,11 +30,9 @@ load_dotenv()
 # CONFIGURATION
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-TARGET_AGENT_ID = os.getenv("TARGET_AGENT_ID", "your-target-agent-id")
-
 INPUT_CSV = "eval_inputs_template.csv"
 OUTPUT_CSV = "eval_results.csv"
-DIMENSIONS_FILE = "dimensions.yaml"
+CONFIG_FILE = "dimensions.yaml"
 
 # Glean Agents API: 0.5 req/s (30 qpm)
 DELAY_BETWEEN_CALLS = 2.5
@@ -45,14 +43,21 @@ DELAY_BETWEEN_CALLS = 2.5
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 
-def load_dimensions(path: str) -> list[dict]:
-    """Load evaluation dimensions from a YAML file."""
+def load_config(path: str) -> tuple[str, list[dict]]:
+    """Load agent ID and dimensions from the YAML config file."""
     with open(path, "r") as f:
-        dims = yaml.safe_load(f)
+        config = yaml.safe_load(f)
+
+    agent_id = config.get("agent_id", "")
+    if not agent_id or agent_id == "your-target-agent-id":
+        raise ValueError("Set agent_id in dimensions.yaml")
+
+    dims = config.get("dimensions", [])
     for d in dims:
         if not all(k in d for k in ("name", "description", "scale")):
             raise ValueError(f"Dimension missing required fields: {d}")
-    return dims
+
+    return agent_id, dims
 
 
 def get_agent_input_schema(api_token: str, server_url: str, agent_id: str) -> dict:
@@ -151,14 +156,15 @@ def main():
     if not server_url:
         print("Error: GLEAN_SERVER_URL not set. Find it at app.glean.com/admin/about-glean.")
         return
-    if TARGET_AGENT_ID.startswith("your-"):
-        print("Error: Set TARGET_AGENT_ID in .env.")
+    # Load config
+    if not os.path.exists(CONFIG_FILE):
+        print(f"Error: {CONFIG_FILE} not found.")
         return
-    # Load dimensions
-    if not os.path.exists(DIMENSIONS_FILE):
-        print(f"Error: {DIMENSIONS_FILE} not found.")
+    try:
+        target_agent_id, dimensions = load_config(CONFIG_FILE)
+    except ValueError as e:
+        print(f"Error: {e}")
         return
-    dimensions = load_dimensions(DIMENSIONS_FILE)
 
     # Read inputs
     if not os.path.exists(INPUT_CSV):
@@ -175,8 +181,8 @@ def main():
         return
 
     # Detect agent type
-    print(f"Detecting input schema for agent {TARGET_AGENT_ID}...")
-    input_schema = get_agent_input_schema(api_token, server_url, TARGET_AGENT_ID)
+    print(f"Detecting input schema for agent {target_agent_id}...")
+    input_schema = get_agent_input_schema(api_token, server_url, target_agent_id)
     if input_schema:
         print(f"  Form-triggered agent. Fields: {list(input_schema.keys())}")
     else:
@@ -201,7 +207,7 @@ def main():
             print("  -> Running target agent...")
             try:
                 agent_output = run_target_agent(
-                    client, TARGET_AGENT_ID, user_input, input_schema, case
+                    client, target_agent_id, user_input, input_schema, case
                 )
             except Exception as e:
                 print(f"  !! Target agent failed: {e}")
@@ -225,9 +231,9 @@ def main():
 
             result = {
                 "input": user_input,
-                "output": agent_output[:2000],
+                "output": agent_output,
                 **scores,
-                "judge_reasoning": judge_response[:3000],
+                "judge_reasoning": judge_response,
             }
             results.append(result)
 

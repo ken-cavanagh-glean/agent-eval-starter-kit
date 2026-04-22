@@ -26,7 +26,6 @@ Edit `.env`:
 |----------|-----------|-----------------|
 | `GLEAN_API_TOKEN` | User-scoped API token with `chat`, `search`, and `agents` scopes | Your Glean admin provisions these. [Docs](https://developers.glean.com/api-info/client/authentication/glean-issued) |
 | `GLEAN_SERVER_URL` | Your Glean backend URL | [app.glean.com/admin/about-glean](https://app.glean.com/admin/about-glean) → "Server instance (QE)" |
-| `TARGET_AGENT_ID` | The agent you want to evaluate | Agent Builder URL: `/admin/agents/{agentId}` |
 
 ### 3. Prepare test cases
 
@@ -50,16 +49,21 @@ The script auto-detects whether your agent is form-triggered or chat-triggered a
 
 ### 4. Configure dimensions
 
-Edit `dimensions.yaml` to define what you're measuring:
+Edit `dimensions.yaml` — set your agent ID and define what you're measuring:
 
 ```yaml
-- name: Groundedness
-  description: Is the response grounded in verifiable company data?
-  scale: FULL | SUBSTANTIAL | PARTIAL | MINIMAL | FAILURE
+# Agent to evaluate (find ID in Agent Builder URL: /admin/agents/{agentId})
+agent_id: abc123def456
 
-- name: Task Success
-  description: Did the agent complete the requested task?
-  scale: PASS | PARTIAL | FAIL
+# Evaluation dimensions
+dimensions:
+  - name: Groundedness
+    description: Is the response grounded in verifiable company data?
+    scale: FULL | SUBSTANTIAL | PARTIAL | MINIMAL | FAILURE
+
+  - name: Task Success
+    description: Did the agent complete the requested task?
+    scale: PASS | PARTIAL | FAIL
 ```
 
 ### 5. Run
