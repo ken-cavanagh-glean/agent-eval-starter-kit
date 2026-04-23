@@ -1,16 +1,5 @@
 #!/usr/bin/env python3
-"""
-Glean Agent Eval Starter Kit
-
-Evaluate any Glean agent using an LLM-as-judge pattern.
-
-Usage:
-    1. Copy .env.example to .env and fill in credentials
-    2. Set agent_id in dimensions.yaml
-    3. Add test cases to eval_inputs_template.csv
-    4. Configure dimensions in dimensions.yaml
-    5. Run: python eval.py
-"""
+"""Evaluate a Glean agent using LLM-as-judge. See README for setup."""
 
 import csv
 import os
@@ -26,74 +15,43 @@ from judge import build_judge_prompt, create_judge_agent, run_judge
 
 load_dotenv()
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# CONFIGURATION
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-INPUT_CSV = "eval_inputs_template.csv"
+INPUT_CSV = "inputs_template.csv"
 OUTPUT_CSV = "eval_results.csv"
 CONFIG_FILE = "dimensions.yaml"
-
-# Glean Agents API: 0.5 req/s (30 qpm)
-DELAY_BETWEEN_CALLS = 2.5
-
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# IMPLEMENTATION
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DELAY_BETWEEN_CALLS = 2.5  # Glean Agents API: 0.5 req/s
 
 
 def load_config(path: str) -> tuple[str, list[dict]]:
-    """Load agent ID and dimensions from the YAML config file."""
-    with open(path, "r") as f:
+    with open(path) as f:
         config = yaml.safe_load(f)
-
     agent_id = config.get("agent_id", "")
     if not agent_id or agent_id == "your-target-agent-id":
         raise ValueError("Set agent_id in dimensions.yaml")
-
-    dims = config.get("dimensions", [])
-    for d in dims:
-        if not all(k in d for k in ("id", "name", "description", "scale")):
-            raise ValueError(
-                f"Dimension '{d.get('name', '?')}' missing required fields "
-                f"(need: id, name, description, scale)"
-            )
-
-    return agent_id, dims
+    return agent_id, config.get("dimensions", [])
 
 
 def get_agent_input_schema(api_token: str, server_url: str, agent_id: str) -> dict:
-    """Fetch the agent's input schema to detect form fields.
-
-    Returns the input_schema dict (e.g. {"prospect": {"type": "string"}})
-    or empty dict for chat-triggered agents.
-    """
+    """Fetch input schema to detect form fields vs chat trigger."""
     resp = httpx.get(
         f"{server_url}/rest/api/v1/agents/{agent_id}/schemas",
         headers={"Authorization": f"Bearer {api_token}"},
         timeout=15,
     )
-    if resp.is_success:
-        return resp.json().get("input_schema", {})
-    return {}
+    return resp.json().get("input_schema", {}) if resp.is_success else {}
 
 
 def run_target_agent(
-    client: Glean,
-    agent_id: str,
-    user_input: str,
-    input_schema: dict,
-    csv_row: dict,
+    client: Glean, agent_id: str, user_input: str,
+    input_schema: dict, csv_row: dict,
 ) -> str:
-    """Run the target agent, handling both form-triggered and chat-triggered agents."""
+    """Run the target agent. Auto-handles form-triggered and chat-triggered."""
     if input_schema:
+        schema_fields = list(input_schema.keys())
         fields = {}
-        schema_field_names = list(input_schema.keys())
-        for field in schema_field_names:
+        for field in schema_fields:
             if field in csv_row and csv_row[field]:
                 fields[field] = csv_row[field]
-            elif field == schema_field_names[0]:
+            elif field == schema_fields[0]:
                 fields[field] = user_input
             else:
                 fields[field] = ""
@@ -101,101 +59,61 @@ def run_target_agent(
     else:
         response = client.client.agents.run(
             agent_id=agent_id,
-            messages=[
-                {"role": "user", "content": [{"text": user_input, "type": "text"}]},
-            ],
+            messages=[{"role": "user", "content": [{"text": user_input, "type": "text"}]}],
         )
 
-    if response.messages:
-        parts = []
-        for msg in response.messages:
-            if msg.content:
-                for block in msg.content:
-                    if hasattr(block, "text") and block.text:
-                        parts.append(block.text)
-        return "\n".join(parts)
-    return ""
+    parts = []
+    for msg in response.messages or []:
+        for block in msg.content or []:
+            if hasattr(block, "text") and block.text:
+                parts.append(block.text)
+    return "\n".join(parts)
 
 
 def parse_score(judge_response: str, dim: dict) -> tuple[str, str]:
-    """Extract score and reasoning from judge response using XML tags.
-
-    Looks for: <dim_id_reasoning>...</dim_id_reasoning> and <dim_id>score</dim_id>
-    """
+    """Extract score and reasoning via XML tags."""
     dim_id = dim["id"]
 
-    reasoning_match = re.search(
-        rf"<{dim_id}_reasoning>([\s\S]*?)</{dim_id}_reasoning>",
-        judge_response,
-    )
+    reasoning_match = re.search(rf"<{dim_id}_reasoning>([\s\S]*?)</{dim_id}_reasoning>", judge_response)
     reasoning = reasoning_match.group(1).strip() if reasoning_match else ""
 
-    score_match = re.search(
-        rf"<{dim_id}>([\s\S]*?)</{dim_id}>",
-        judge_response,
-    )
+    score_match = re.search(rf"<{dim_id}>([\s\S]*?)</{dim_id}>", judge_response)
     raw_score = score_match.group(1).strip().lower() if score_match else ""
 
-    # Match against valid scale values
-    matched = None
-    for category in dim["scale"]:
-        if category.lower() in raw_score:
-            matched = category
-            break
-
+    matched = next((c for c in dim["scale"] if c.lower() in raw_score), None)
     if not matched:
         print(f"  !! Could not parse score for {dim['name']}. Raw: '{raw_score}'")
-
     return matched or raw_score or "PARSE_ERROR", reasoning
 
 
 def main():
     api_token = os.getenv("GLEAN_API_TOKEN")
     server_url = os.getenv("GLEAN_SERVER_URL")
-
-    if not api_token:
-        print("Error: GLEAN_API_TOKEN not set. Copy .env.example to .env and fill it in.")
-        return
-    if not server_url:
-        print("Error: GLEAN_SERVER_URL not set. Find it at app.glean.com/admin/about-glean.")
+    if not api_token or not server_url:
+        print("Error: Set GLEAN_API_TOKEN and GLEAN_SERVER_URL in .env")
         return
 
-    if not os.path.exists(CONFIG_FILE):
-        print(f"Error: {CONFIG_FILE} not found.")
-        return
     try:
         target_agent_id, dimensions = load_config(CONFIG_FILE)
-    except ValueError as e:
+    except (FileNotFoundError, ValueError) as e:
         print(f"Error: {e}")
         return
 
-    if not os.path.exists(INPUT_CSV):
-        print(f"Error: {INPUT_CSV} not found.")
-        return
-    with open(INPUT_CSV, "r") as f:
+    with open(INPUT_CSV) as f:
         reader = csv.DictReader(f)
-        if "input" not in (reader.fieldnames or []):
-            print("Error: CSV must have an 'input' column.")
-            return
         cases = list(reader)
     if not cases:
-        print("Error: No rows in CSV.")
+        print(f"Error: No rows in {INPUT_CSV}")
         return
 
     # Detect agent type
-    print(f"Detecting input schema for agent {target_agent_id}...")
     input_schema = get_agent_input_schema(api_token, server_url, target_agent_id)
     if input_schema:
-        print(f"  Form-triggered agent. Fields: {list(input_schema.keys())}")
+        print(f"Agent {target_agent_id} — form fields: {list(input_schema.keys())}")
     else:
-        print(f"  Chat-triggered agent.")
+        print(f"Agent {target_agent_id} — chat-triggered")
+    print(f"Evaluating {len(cases)} cases | Dimensions: {', '.join(d['name'] for d in dimensions)}\n")
 
-    print(f"Evaluating {len(cases)} cases")
-    print(f"Judge: ChatGlean + GleanSearchTool (one call per dimension)")
-    print(f"Dimensions: {', '.join(d['name'] for d in dimensions)}")
-    print()
-
-    # Create judge agent (reused across all calls)
     judge = create_judge_agent()
     results = []
 
@@ -204,45 +122,36 @@ def main():
             user_input = case["input"]
             print(f"[{i + 1}/{len(cases)}] {user_input[:80]}...")
 
-            # Step 1: Run target agent
-            print("  -> Running target agent...")
+            # Run target agent
             try:
-                agent_output = run_target_agent(
-                    client, target_agent_id, user_input, input_schema, case
-                )
+                agent_output = run_target_agent(client, target_agent_id, user_input, input_schema, case)
             except Exception as e:
                 print(f"  !! Target agent failed: {e}")
                 agent_output = f"AGENT_ERROR: {e}"
-
             time.sleep(DELAY_BETWEEN_CALLS)
 
-            # Step 2: Run one judge call per dimension
-            scores = {}
-            reasonings = {}
+            # Judge each dimension independently
+            scores, reasonings = {}, {}
             for dim in dimensions:
-                print(f"  -> Judging: {dim['name']}...")
-                prompt = build_judge_prompt(user_input, agent_output, dim)
+                print(f"  -> {dim['name']}...", end=" ", flush=True)
                 try:
-                    judge_response = run_judge(prompt, judge)
-                    score, reasoning = parse_score(judge_response, dim)
+                    resp = run_judge(build_judge_prompt(user_input, agent_output, dim), judge)
+                    score, reasoning = parse_score(resp, dim)
                     scores[dim["name"]] = score
                     reasonings[dim["name"]] = reasoning
+                    print(score)
                 except Exception as e:
-                    print(f"  !! Judge failed for {dim['name']}: {e}")
+                    print(f"ERROR: {e}")
                     scores[dim["name"]] = "JUDGE_ERROR"
                     reasonings[dim["name"]] = str(e)
                 time.sleep(DELAY_BETWEEN_CALLS)
 
-            result = {
+            results.append({
                 "input": user_input,
                 "output": agent_output,
                 **scores,
-                **{f"{name}_reasoning": r for name, r in reasonings.items()},
-            }
-            results.append(result)
-
-            for dim_name, score in scores.items():
-                print(f"  {dim_name}: {score}")
+                **{f"{k}_reasoning": v for k, v in reasonings.items()},
+            })
 
     # Write results
     if results:

@@ -1,74 +1,28 @@
-# Eval Configuration
 # Agent to evaluate (find ID in Agent Builder URL: /admin/agents/{agentId})
 agent_id: your-target-agent-id
 
-# Evaluation Dimensions
-# Each dimension gets its own judge call for isolated, accurate scoring.
-# Add, remove, or edit dimensions to match your evaluation criteria.
-#
-# Fields:
-#   id          — unique identifier (snake_case, used for XML tag parsing)
-#   name        — display name (shown in output CSV)
-#   description — what the judge evaluates (be specific)
-#   scale       — ordered list of score options (judge picks one)
-#
-# Available dimensions:
-#
-#   | Dimension          | Description                                                       | Scale                                        |
-#   |--------------------|-------------------------------------------------------------------|----------------------------------------------|
-#   | Response Quality   | Is the output well-structured, concise, and actionable?           | full, substantial, partial, minimal, failure |
-#   | Groundedness       | Are claims supported by documents the agent actually retrieved?   | full, substantial, partial, minimal, failure |
-#   | Hallucination Risk | Does the response assert specific details without source backing? | low, medium, high                            |
-#   | Factual Accuracy   | Are specific claims true according to current company data?       | full, substantial, partial, minimal, failure |
-#
-# Only Response Quality and Groundedness are enabled by default.
-# Uncomment or add others as needed.
-
+# Evaluation dimensions — each gets its own isolated judge call.
 dimensions:
   - id: response_quality
     name: Response Quality
     description: >
       Is the output well-structured, concise, and actionable?
-      Consider formatting, completeness, and whether it directly
-      addresses the request. Evaluate presentation, not factual correctness.
-    scale:
-      - full
-      - substantial
-      - partial
-      - minimal
-      - failure
+      Evaluate presentation, not factual correctness.
+    scale: [full, substantial, partial, minimal, failure]
 
   - id: groundedness
     name: Groundedness
     description: >
-      Are the response's claims supported by the documents the agent
-      actually retrieved? Use Glean Search to check whether key claims
-      can be traced to indexed company documents.
-    scale:
-      - full
-      - substantial
-      - partial
-      - minimal
-      - failure
+      Are the response's claims supported by documents the agent retrieved?
+      Use Glean Search to verify key claims.
+    scale: [full, substantial, partial, minimal, failure]
 
   # - id: hallucination_risk
   #   name: Hallucination Risk
-  #   description: >
-  #     Does the response assert specific details (names, numbers, dates,
-  #     URLs) without source backing? Check for fabricated specifics.
-  #   scale:
-  #     - low
-  #     - medium
-  #     - high
+  #   description: Does the response assert specific details without source backing?
+  #   scale: [low, medium, high]
 
   # - id: factual_accuracy
   #   name: Factual Accuracy
-  #   description: >
-  #     Are specific claims true according to current company data?
-  #     Use Glean Search to independently verify key facts.
-  #   scale:
-  #     - full
-  #     - substantial
-  #     - partial
-  #     - minimal
-  #     - failure
+  #   description: Are specific claims true according to current company data?
+  #   scale: [full, substantial, partial, minimal, failure]
