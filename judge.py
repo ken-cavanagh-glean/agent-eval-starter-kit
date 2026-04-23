@@ -2,8 +2,10 @@
 Code-first judge for Glean agent evaluation.
 
 Uses LangChain with ChatGlean (Glean as the LLM) and GleanSearchTool
-for fact verification. No external LLM provider needed — everything
-runs through your Glean instance.
+for fact verification. No external LLM provider needed.
+
+Each dimension gets its own judge call for isolated scoring.
+Scores are extracted via XML tags (not markdown) for reliable parsing.
 """
 
 from langchain.agents import AgentExecutor, create_openai_tools_agent
@@ -13,44 +15,44 @@ from langchain_glean.retrievers import GleanSearchRetriever
 from langchain_glean.tools import GleanSearchTool
 
 
-def build_judge_prompt(
-    user_input: str,
-    agent_output: str,
-    dimensions: list[dict],
-) -> str:
-    """Build the evaluation prompt with injected dimensions."""
+def build_judge_prompt(user_input: str, agent_output: str, dim: dict) -> str:
+    """Build a judge prompt for a single dimension.
 
-    dims_block = "\n".join(
-        f"  {d['name']}: {d['scale']}\n    {d['description']}"
-        for d in dimensions
-    )
+    Uses XML tags for structured output so scores can be reliably parsed
+    regardless of how the LLM formats its markdown.
+    """
+    dim_id = dim["id"]
+    scale_str = " / ".join(dim["scale"])
 
-    return f"""You are evaluating an AI agent's output on these dimensions:
+    return f"""You are an expert evaluator assessing an AI agent's response.
 
-{dims_block}
+=== DIMENSION ===
+{dim["name"]}: {dim["description"]}
 
-=== USER INPUT ===
+Scale: {scale_str}
+
+=== MATERIAL ===
+
+<query>
 {user_input}
+</query>
 
-=== AGENT OUTPUT ===
+<actual_response>
 {agent_output}
+</actual_response>
 
-For each dimension, provide a reasoned analysis BEFORE giving your score.
-Use your glean_search tool to verify factual claims in the output.
+=== INSTRUCTIONS ===
 
-Format your response as:
+1. Analyze the response against the dimension above
+2. Use your glean_search tool to verify factual claims if needed
+3. Provide your reasoning, then your score
 
-## [Dimension Name]
-**Analysis:** [Your reasoning]
-**Score:** [Score from the scale above]
+Output EXACTLY this format:
 
-Repeat for each dimension, then:
-
-## Overall Notes
-[Any additional observations]
-
-If the agent produced an error or empty response, score accordingly —
-do NOT simulate what the agent might have said."""
+<{dim_id}_reasoning>
+[Your analysis here]
+</{dim_id}_reasoning>
+<{dim_id}>[{scale_str}]</{dim_id}>"""
 
 
 def create_judge_agent() -> AgentExecutor:

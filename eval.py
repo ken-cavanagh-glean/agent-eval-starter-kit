@@ -6,7 +6,7 @@ Evaluate any Glean agent using an LLM-as-judge pattern.
 
 Usage:
     1. Copy .env.example to .env and fill in credentials
-    2. Set TARGET_AGENT_ID to the agent you want to evaluate
+    2. Set agent_id in dimensions.yaml
     3. Add test cases to eval_inputs_template.csv
     4. Configure dimensions in dimensions.yaml
     5. Run: python eval.py
@@ -54,8 +54,11 @@ def load_config(path: str) -> tuple[str, list[dict]]:
 
     dims = config.get("dimensions", [])
     for d in dims:
-        if not all(k in d for k in ("name", "description", "scale")):
-            raise ValueError(f"Dimension missing required fields: {d}")
+        if not all(k in d for k in ("id", "name", "description", "scale")):
+            raise ValueError(
+                f"Dimension '{d.get('name', '?')}' missing required fields "
+                f"(need: id, name, description, scale)"
+            )
 
     return agent_id, dims
 
@@ -83,32 +86,19 @@ def run_target_agent(
     input_schema: dict,
     csv_row: dict,
 ) -> str:
-    """Run the target agent, handling both form-triggered and chat-triggered agents.
-
-    For form-triggered agents: maps CSV columns to form fields.
-    For chat-triggered agents: sends the input as a chat message.
-    """
+    """Run the target agent, handling both form-triggered and chat-triggered agents."""
     if input_schema:
-        # Form-triggered: build input dict from schema fields
         fields = {}
         schema_field_names = list(input_schema.keys())
-
         for field in schema_field_names:
             if field in csv_row and csv_row[field]:
-                # CSV has a column matching this field name
                 fields[field] = csv_row[field]
             elif field == schema_field_names[0]:
-                # First field gets the "input" column value as default
                 fields[field] = user_input
             else:
                 fields[field] = ""
-
-        response = client.client.agents.run(
-            agent_id=agent_id,
-            input=fields,
-        )
+        response = client.client.agents.run(agent_id=agent_id, input=fields)
     else:
-        # Chat-triggered: send as message
         response = client.client.agents.run(
             agent_id=agent_id,
             messages=[
@@ -116,7 +106,6 @@ def run_target_agent(
             ],
         )
 
-    # Extract text from response
     if response.messages:
         parts = []
         for msg in response.messages:
@@ -125,25 +114,39 @@ def run_target_agent(
                     if hasattr(block, "text") and block.text:
                         parts.append(block.text)
         return "\n".join(parts)
-
     return ""
 
 
-def parse_scores(judge_response: str, dimensions: list[dict]) -> dict:
-    """Extract scores from judge response.
+def parse_score(judge_response: str, dim: dict) -> tuple[str, str]:
+    """Extract score and reasoning from judge response using XML tags.
 
-    Looks for: ## Dimension Name ... **Score:** VALUE
+    Looks for: <dim_id_reasoning>...</dim_id_reasoning> and <dim_id>score</dim_id>
     """
-    scores = {}
-    for dim in dimensions:
-        name = dim["name"]
-        pattern = (
-            rf"##\s*{re.escape(name)}"
-            rf".*?\*\*Score:\*\*\s*([A-Z_]+)"
-        )
-        match = re.search(pattern, judge_response, re.DOTALL | re.IGNORECASE)
-        scores[name] = match.group(1).strip() if match else "PARSE_ERROR"
-    return scores
+    dim_id = dim["id"]
+
+    reasoning_match = re.search(
+        rf"<{dim_id}_reasoning>([\s\S]*?)</{dim_id}_reasoning>",
+        judge_response,
+    )
+    reasoning = reasoning_match.group(1).strip() if reasoning_match else ""
+
+    score_match = re.search(
+        rf"<{dim_id}>([\s\S]*?)</{dim_id}>",
+        judge_response,
+    )
+    raw_score = score_match.group(1).strip().lower() if score_match else ""
+
+    # Match against valid scale values
+    matched = None
+    for category in dim["scale"]:
+        if category.lower() in raw_score:
+            matched = category
+            break
+
+    if not matched:
+        print(f"  !! Could not parse score for {dim['name']}. Raw: '{raw_score}'")
+
+    return matched or raw_score or "PARSE_ERROR", reasoning
 
 
 def main():
@@ -156,7 +159,7 @@ def main():
     if not server_url:
         print("Error: GLEAN_SERVER_URL not set. Find it at app.glean.com/admin/about-glean.")
         return
-    # Load config
+
     if not os.path.exists(CONFIG_FILE):
         print(f"Error: {CONFIG_FILE} not found.")
         return
@@ -166,7 +169,6 @@ def main():
         print(f"Error: {e}")
         return
 
-    # Read inputs
     if not os.path.exists(INPUT_CSV):
         print(f"Error: {INPUT_CSV} not found.")
         return
@@ -189,13 +191,12 @@ def main():
         print(f"  Chat-triggered agent.")
 
     print(f"Evaluating {len(cases)} cases")
-    print(f"Judge: ChatGlean + GleanSearchTool")
+    print(f"Judge: ChatGlean + GleanSearchTool (one call per dimension)")
     print(f"Dimensions: {', '.join(d['name'] for d in dimensions)}")
     print()
 
-    # Create judge agent (once, reused across cases)
+    # Create judge agent (reused across all calls)
     judge = create_judge_agent()
-
     results = []
 
     with Glean(api_token=api_token, server_url=server_url) as client:
@@ -215,25 +216,28 @@ def main():
 
             time.sleep(DELAY_BETWEEN_CALLS)
 
-            # Step 2: Run judge
-            print("  -> Running judge...")
-            judge_prompt = build_judge_prompt(user_input, agent_output, dimensions)
-            try:
-                judge_response = run_judge(judge_prompt, judge)
-            except Exception as e:
-                print(f"  !! Judge failed: {e}")
-                judge_response = f"JUDGE_ERROR: {e}"
-
-            time.sleep(DELAY_BETWEEN_CALLS)
-
-            # Step 3: Parse scores
-            scores = parse_scores(judge_response, dimensions)
+            # Step 2: Run one judge call per dimension
+            scores = {}
+            reasonings = {}
+            for dim in dimensions:
+                print(f"  -> Judging: {dim['name']}...")
+                prompt = build_judge_prompt(user_input, agent_output, dim)
+                try:
+                    judge_response = run_judge(prompt, judge)
+                    score, reasoning = parse_score(judge_response, dim)
+                    scores[dim["name"]] = score
+                    reasonings[dim["name"]] = reasoning
+                except Exception as e:
+                    print(f"  !! Judge failed for {dim['name']}: {e}")
+                    scores[dim["name"]] = "JUDGE_ERROR"
+                    reasonings[dim["name"]] = str(e)
+                time.sleep(DELAY_BETWEEN_CALLS)
 
             result = {
                 "input": user_input,
                 "output": agent_output,
                 **scores,
-                "judge_reasoning": judge_response,
+                **{f"{name}_reasoning": r for name, r in reasonings.items()},
             }
             results.append(result)
 
@@ -245,7 +249,7 @@ def main():
         fieldnames = (
             ["input", "output"]
             + [d["name"] for d in dimensions]
-            + ["judge_reasoning"]
+            + [f"{d['name']}_reasoning" for d in dimensions]
         )
         with open(OUTPUT_CSV, "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
