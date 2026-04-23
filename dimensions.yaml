@@ -1,7 +1,7 @@
-# Agent to evaluate (find ID in Agent Builder URL: /admin/agents/{agentId})
 agent_id: your-target-agent-id
-
-# Evaluation dimensions — each gets its own isolated judge call.
+agent_description: >
+  Describe what this agent does, what a good response looks like,
+  and any important constraints or formatting expectations.
 dimensions:
   - id: response_quality
     name: Response Quality
@@ -9,20 +9,9 @@ dimensions:
       Is the output well-structured, concise, and actionable?
       Evaluate presentation, not factual correctness.
     scale: [full, substantial, partial, minimal, failure]
-
   - id: groundedness
     name: Groundedness
     description: >
       Are the response's claims supported by documents the agent retrieved?
       Use Glean Search to verify key claims.
     scale: [full, substantial, partial, minimal, failure]
-
-  # - id: hallucination_risk
-  #   name: Hallucination Risk
-  #   description: Does the response assert specific details without source backing?
-  #   scale: [low, medium, high]
-
-  # - id: factual_accuracy
-  #   name: Factual Accuracy
-  #   description: Are specific claims true according to current company data?
-  #   scale: [full, substantial, partial, minimal, failure]

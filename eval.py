@@ -21,13 +21,16 @@ CONFIG_FILE = "dimensions.yaml"
 DELAY_BETWEEN_CALLS = 2.5  # Glean Agents API: 0.5 req/s
 
 
-def load_config(path: str) -> tuple[str, list[dict]]:
+def load_config(path: str) -> tuple[str, str, list[dict]]:
     with open(path) as f:
         config = yaml.safe_load(f)
     agent_id = config.get("agent_id", "")
     if not agent_id or agent_id == "your-target-agent-id":
         raise ValueError("Set agent_id in dimensions.yaml")
-    return agent_id, config.get("dimensions", [])
+    agent_desc = config.get("agent_description", "")
+    if not agent_desc or agent_desc.startswith("Describe what"):
+        raise ValueError("Set agent_description in dimensions.yaml")
+    return agent_id, agent_desc, config.get("dimensions", [])
 
 
 def get_agent_input_schema(api_token: str, server_url: str, agent_id: str) -> dict:
@@ -94,7 +97,7 @@ def main():
         return
 
     try:
-        target_agent_id, dimensions = load_config(CONFIG_FILE)
+        target_agent_id, agent_desc, dimensions = load_config(CONFIG_FILE)
     except (FileNotFoundError, ValueError) as e:
         print(f"Error: {e}")
         return
@@ -135,7 +138,7 @@ def main():
             for dim in dimensions:
                 print(f"  -> {dim['name']}...", end=" ", flush=True)
                 try:
-                    resp = run_judge(build_judge_prompt(user_input, agent_output, dim), judge)
+                    resp = run_judge(build_judge_prompt(user_input, agent_output, dim, agent_desc), judge)
                     score, reasoning = parse_score(resp, dim)
                     scores[dim["name"]] = score
                     reasonings[dim["name"]] = reasoning

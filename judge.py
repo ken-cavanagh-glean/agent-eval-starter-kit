@@ -15,7 +15,7 @@ from langchain_glean.retrievers import GleanSearchRetriever
 from langchain_glean.tools import GleanSearchTool
 
 
-def build_judge_prompt(user_input: str, agent_output: str, dim: dict) -> str:
+def build_judge_prompt(user_input: str, agent_output: str, dim: dict, agent_description: str) -> str:
     """Build a judge prompt for a single dimension.
 
     Uses XML tags for structured output so scores can be reliably parsed
@@ -25,6 +25,9 @@ def build_judge_prompt(user_input: str, agent_output: str, dim: dict) -> str:
     scale_str = " / ".join(dim["scale"])
 
     return f"""You are an expert evaluator assessing an AI agent's response.
+
+=== AGENT UNDER EVALUATION ===
+{agent_description}
 
 === DIMENSION ===
 {dim["name"]}: {dim["description"]}
@@ -37,9 +40,9 @@ Scale: {scale_str}
 {user_input}
 </query>
 
-<actual_response>
+<agent_response>
 {agent_output}
-</actual_response>
+</agent_response>
 
 === INSTRUCTIONS ===
 
